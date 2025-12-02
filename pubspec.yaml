@@ -13,11 +13,12 @@ dependencies:
   flutter:
     sdk: flutter
   google_fonts: ^6.1.0
+  image: ^4.5.4
   image_picker: ^1.0.4
   provider: ^6.1.5+1
+  tflite_flutter: ^0.12.1
 
 dev_dependencies:
-
   flutter_lints: ^2.0.0
   flutter_test:
     sdk: flutter
@@ -27,3 +28,4 @@ flutter:
 
   assets:
     - assets/images/
+    - assets/model/model.tflite

@@ -1,18 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
-import 'package:rempah_id/controller/controller.dart';
 import 'pages/menu.dart';
 import 'pages/detail.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
-  runApp(MultiProvider(
-      providers: [
-        ChangeNotifierProvider(create: (_) => PredictionProvider()),
-      ],
-      child: const RempahApp(),
-    ),);
+  runApp(const RempahApp(),);
 }
 
 class RempahApp extends StatelessWidget {

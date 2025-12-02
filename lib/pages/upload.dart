@@ -1,9 +1,11 @@
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
+import 'package:image/image.dart' as img;
 import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
+import 'package:tflite_flutter/tflite_flutter.dart';
 
-import 'package:rempah_id/controller/controller.dart';
 
 class Upload extends StatefulWidget {
   const Upload({Key? key}) : super(key: key);
@@ -16,17 +18,64 @@ class _UploadPageState extends State<Upload> {
   File? _selectedImage;
   bool _isProcessing = false;
   bool _hasResult = false;
-  String? _predictedSpice;
-  double? _confidence;
   final ImagePicker _picker = ImagePicker();
+  late Interpreter interpreter;
+  bool modelLoaded = false;
+  String resultText = "";
+  String resultConfidence = "";
 
-  // Dummy data untuk prediksi
-  final List<Map<String, dynamic>> _spices = [
-    {'name': 'Jahe', 'emoji': '🫚', 'color': const Color(0xFFD4A574)},
-    {'name': 'Kencur', 'emoji': '🌱', 'color': const Color(0xFFE8D5B7)},
-    {'name': 'Kunyit', 'emoji': '🧡', 'color': const Color(0xFFFFD54F)},
-    {'name': 'Lengkuas', 'emoji': '🌶️', 'color': const Color(0xFFFFAB91)},
+  List<String> classNames = [
+  "Jahe",
+  "Kencur",
+  "Kunyit",
+  "Lengkuas"
   ];
+
+  @override
+  void initState(){
+    super.initState();
+    loadModel();
+  }
+
+  Future<void> loadModel() async {
+    try {
+      interpreter = await Interpreter.fromAsset('assets/model/model.tflite');
+      setState(() {
+        modelLoaded = true;
+      });
+      print("Model loaded!");
+    } catch (e) {
+      print("Gagal load model: $e");
+    }
+  }
+
+  Future<Float32List> processImage(File file) async {
+  final bytes = await file.readAsBytes();
+  img.Image? oriImage = img.decodeImage(bytes);
+
+  // Resize ke ukuran 224x224
+  img.Image resized = img.copyResize(oriImage!, width: 224, height: 224);
+
+  Float32List imageData = Float32List(224 * 224 * 3);
+  int index = 0;
+
+  for (int y = 0; y < 224; y++) {
+    for (int x = 0; x < 224; x++) {
+      final p = resized.getPixel(x, y);
+
+      final r = p.r.toDouble();
+      final g = p.g.toDouble();
+      final b = p.b.toDouble();
+
+      // === MobileNetV2 PREPROCESSING ===
+      imageData[index++] = (r / 127.5) - 1.0;
+      imageData[index++] = (g / 127.5) - 1.0;
+      imageData[index++] = (b / 127.5) - 1.0;
+    }
+  }
+
+  return imageData;
+}
 
   Future<void> _pickImageFromGallery() async {
     try {
@@ -41,8 +90,6 @@ class _UploadPageState extends State<Upload> {
         setState(() {
           _selectedImage = File(image.path);
           _hasResult = false;
-          _predictedSpice = null;
-          _confidence = null;
         });
       }
     } catch (e) {
@@ -52,39 +99,48 @@ class _UploadPageState extends State<Upload> {
     }
   }
 
-  Future<void> _processImage() async {
-  final predictionProvider = context.read<PredictionProvider>();
-
-  if (_selectedImage == null) {
-    _showErrorDialog('Silakan pilih gambar terlebih dahulu');
+  Future<void> predictImage(File file) async {
+  if (!modelLoaded) {
+    print("Model belum siap!");
     return;
   }
 
-  setState(() {
-    _isProcessing = true;
-  });
+  Float32List input = await processImage(file);
+  var inputTensor = input.reshape([1, 224, 224, 3]);
 
-  if (!mounted) return;
+  // jumlah kelas harus sesuai
+  var outputTensor = List.filled(classNames.length, 0.0).reshape([1, classNames.length]);
 
-  await predictionProvider.predictImage(_selectedImage);
+  interpreter.run(inputTensor, outputTensor);
 
-  if (!mounted) return;
+  final result = outputTensor[0];
+  final maxValue = (result as List<dynamic>).cast<double>().reduce((a, b) => a > b ? a : b);
+  final index = result.indexOf(maxValue);
+
+  final predictedClassName = classNames[index];
+  final confidence = (result[index] * 100).toStringAsFixed(2);
+
+  print("HASIL: $result");
+  print("KELAS INDEX: $index");
+  print("NAMA KELAS: $predictedClassName");
+  print("CONFIDENCE: $confidence%");
 
   setState(() {
     _isProcessing = false;
     _hasResult = true;
+    resultText = predictedClassName;
+    resultConfidence = confidence.toString();
   });
 
   _showSuccessDialog();
 }
 
 
+
   void _reset() {
     setState(() {
       _selectedImage = null;
       _hasResult = false;
-      _predictedSpice = null;
-      _confidence = null;
       _isProcessing = false;
     });
   }
@@ -115,7 +171,6 @@ class _UploadPageState extends State<Upload> {
   }
 
   void _showSuccessDialog() {
-    final predictionProvider = Provider.of<PredictionProvider>(context, listen: false);
     
     if (!mounted) return;
     
@@ -130,8 +185,29 @@ class _UploadPageState extends State<Upload> {
             Text('Berhasil!'),
           ],
         ),
-        content: Text(
-          'Rempah berhasil diidentifikasi sebagai ${(predictionProvider.predictionMessage)}',
+        content: SizedBox(
+          height: MediaQuery.of(context).size.height * 0.15,
+          child: Column(
+            children: [
+              Text(
+                resultText,
+                style: TextStyle(fontSize: 20,color: Color(0xFF2E7D32), fontWeight: FontWeight.bold),
+              ),
+              SizedBox(height: 10),
+              Text(
+                'Confidence: $resultConfidence%',
+                style: TextStyle(fontSize: 16,fontWeight: FontWeight.bold,),
+              ),
+              SizedBox(height: 5,),
+              LinearProgressIndicator(
+                value: double.parse(resultConfidence) / 100,
+                color: Color(0xFF2E7D32),
+                backgroundColor: Colors.grey[300],
+                minHeight: 10,
+                borderRadius: BorderRadius.circular(5),
+              ),
+            ],
+          ),
         ),
         actions: [
           TextButton(
@@ -350,13 +426,17 @@ class _UploadPageState extends State<Upload> {
                 const SizedBox(width: 10),
                 Expanded(
                   child: Text(
-                    'Gambar siap diproses',
+                    _hasResult
+                    ? 'Gambar teridentifikasi sebagai $resultText'
+                    : 'Gambar siap diproses',
                     style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                       fontWeight: FontWeight.w600,
                     ),
                   ),
                 ),
-                IconButton(
+                _hasResult
+                ? const SizedBox.shrink()
+                : IconButton(
                   onPressed: _reset,
                   icon: const Icon(Icons.close, color: Colors.red),
                   tooltip: 'Hapus gambar',
@@ -375,7 +455,20 @@ class _UploadPageState extends State<Upload> {
         SizedBox(
           width: double.infinity,
           child: ElevatedButton.icon(
-            onPressed: _isProcessing ? null : _processImage,
+            onPressed: _isProcessing
+              ? null
+              : () async {
+                  if (_selectedImage == null) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('Silakan pilih gambar terlebih dahulu'),
+                      ),
+                    );
+                    return;
+                  }
+
+                  await predictImage(_selectedImage!);
+                },
             icon: _isProcessing
                 ? const SizedBox(
                     width: 20,
@@ -411,7 +504,6 @@ class _UploadPageState extends State<Upload> {
   }
 
   Widget _buildResultCard() {
-    final predictionProvider = context.read<PredictionProvider>();
 
     // Map nama ke path gambar
     final Map<String, String> imagePaths = {
@@ -452,7 +544,7 @@ class _UploadPageState extends State<Upload> {
           const SizedBox(height: 20),
           ClipOval(
             child: Image.asset(
-              imagePaths[predictionProvider.predictionMessage] ?? '',
+              imagePaths[resultText] ?? '',
               width: 100,
               height: 100,
               fit: BoxFit.cover,
@@ -466,7 +558,7 @@ class _UploadPageState extends State<Upload> {
                   ),
                   child: Center(
                     child: Text(
-                      predictionProvider.predictionMessage.toString(),
+                      resultText,
                       style: const TextStyle(fontSize: 50),
                     ),
                   ),
@@ -476,7 +568,7 @@ class _UploadPageState extends State<Upload> {
           ),
           const SizedBox(height: 15),
           Text(
-            predictionProvider.predictionMessage!,
+            resultText,
             style: Theme.of(context).textTheme.displayMedium?.copyWith(
               fontSize: 32,
             ),
@@ -489,7 +581,7 @@ class _UploadPageState extends State<Upload> {
                 Navigator.pushNamed(
                   context,
                   '/detail',
-                  arguments: predictionProvider.predictionMessage, // Kirim nama rempah hasil prediksi
+                  arguments: resultText
                 );
               },
               icon: const Icon(Icons.article),
